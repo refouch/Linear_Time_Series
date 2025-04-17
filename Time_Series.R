@@ -9,8 +9,7 @@
 
 #Downloading packages (code borrowed online)
 list.of.packages <- c("readr", "zoo", "tseries", "stargazer", "fUnitRoots", "dplyr",
-                      "aTSA", "xtable", "forecast", "ellipse", "graphics", "knitr", 
-                      "rmarkdown", "markdown","rstudioapi")
+                      "aTSA", "xtable", "forecast", "ellipse", "graphics", "knitr","rstudioapi")
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages, repos = "http://cran.us.r-project.org")
@@ -28,7 +27,7 @@ rm(list=ls())
 #######################################
 
 #Importing the series
-series <- read_csv2('valeurs_mensuelles_jus.csv')
+series <- read.csv("monthly_values.csv", sep=";")
 
 #Cleaning unwanted data and renaming the columns
 series <- series[-c(1:3), ]
@@ -55,13 +54,15 @@ ddproduction <- diff(dproduction,1)
 
 ########################
 ### PLOTTING BOTH SERIES
+
+plot(production_train)
+
 data_plot <- cbind(production_train,dproduction)
 colnames(data_plot) <- c('Raw Series','Diff. Series')
 plot(data_plot, 
      xlab = 'Time',
      main = "Series before and after differentiation",
      col = 'blue')
-
 
 #########################
 ### III. STATIONARITY ###
@@ -114,7 +115,7 @@ Qtests(adf@test$lm$residuals, 24, fitdf = length(adf@test$lm$coefficients))
 #Donc on corrige pour 24 lag
 adfTest_valid(production_train, 24, "c") 
 # P VALUE 0.3937 -> On rejette PAS H0 du test ADF, donc c'est pas stationnaire c'est parfait,on va devoir différencier.
-
+pp.test(as.vector(production_train), output = TRUE)
 #We will thus differenciate our serie to obtain a better rejected adf test
 
 #Creating lags and first difference
@@ -148,16 +149,15 @@ kpss.test(x=as.vector(dproduction)) #KPSS
 ######################
 
 #We center the series just to test because we did it in the TD
-y <- dproduction - mean(dproduction)
 par(mfrow=c(1,2))
-acf(y,24);pacf(y,24)
+acf(dproduction,24);pacf(dproduction,24)
 dev.off()
 
 #Judging by the graph we then choose
-qmax <- 1
-pmax <- 5
+qmax <- 2
+pmax <- 4
 
-arima <- arima(y,c(1,0,3))
+arima <- arima(dproduction,c(6,1,2))
 Box.test(arima$residuals, lag=6, type="Ljung-Box", fitdf=5) #
 
 Qtests(arima$residuals, 24, 5)
@@ -174,7 +174,7 @@ p_value <- #This function returns the p-values of the estimated ARMA
 model_choice <- #This function estimates an arima and checks the fit and validity of the model with p-value
   function(p, q, data = dproduction, k = 24) {
     estim <-
-      try(arima(data, c(p, 0, q), optim.control = list(maxit = 20000)))
+      try(arima(data, c(p, 1, q), optim.control = list(maxit = 20000)))
     if (class(estim) == "try-error")
       return(c(
         "p" = p,
@@ -228,20 +228,13 @@ selec <- armamodels[armamodels[,"ok"]==1&!is.na(armamodels[,"ok"]),] #modeles bi
 selec
 ### On a ? modeles bien ajustes et valides
 
-### PAS DE MODELES BIEN AJUSTÉS ET VALIDES A LA FOIS -> PROBLEMATIQUE
-## Peut-être que la Série n'est en fin de compte pas stationnaire ? On essaie avec la série différenciée deux fois juste pour être sûr...
+#On peut tester aussi ici sur la série pas différenciée (juste pour le malt)
+armamodelraw <-arma_model_choice(pmax,qmax,production_train)
 
-par(mfrow=c(1,2))
-acf(ddproduction,24);pacf(ddproduction,24)
-dev.off()
+print(armamodelraw)
+##########
+## AIC / BIC
 
-plot(ddproduction)
 
-pmax <- 7
-qmax <- 2
-
-armamodels <- arma_model_choice(pmax,qmax, ddproduction) #estime tous les arima (patienter...)
-
-print(armamodels)
-selec <- armamodels[armamodels[,"ok"]==1&!is.na(armamodels[,"ok"]),] #modeles bien ajustes et valides
+selec <- armamodelraw[armamodelraw[,"ok"]==1&!is.na(armamodelraw[,"ok"]),] #modeles bien ajustes et valides
 selec
