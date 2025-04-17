@@ -8,7 +8,7 @@
 ################
 
 #Downloading packages (code borrowed online)
-list.of.packages <- c("readr", "zoo", "tseries", "stargazer", "fUnitRoots", "dplyr",
+list.of.packages <- c("zoo", "tseries", "stargazer", "fUnitRoots", "dplyr",
                       "aTSA", "xtable", "forecast", "ellipse", "graphics", "knitr","rstudioapi")
 
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
@@ -50,7 +50,6 @@ production <- zoo(series$Valeur, order.by = dates)
 #Dropping the last 4 values for prediction + creating differentiated series
 production_train <- production[1:(length(production)-4)]
 dproduction <- diff(production_train,1)
-ddproduction <- diff(dproduction,1)
 
 ########################
 ### PLOTTING BOTH SERIES
@@ -81,7 +80,7 @@ adf
 # P value is very small, we can reject the null hypothesis -> The series is likely stationary
 # BUT: we need to check for autocorrelation of the residuals,
 
-#We define two functions to determine the number of lags we have to consider to get rid of autocorrelation
+#We define functions to determine the number of lags we have to consider to get rid of autocorrelation
 
 #Qtest
 Qtests <- function(series, k, fitdf=0) {
@@ -92,7 +91,11 @@ Qtests <- function(series, k, fitdf=0) {
   return(t(pvals))
 }
 
-#adfTest
+Qtests(adf@test$lm$residuals, 24, fitdf = length(adf@test$lm$coefficients)) 
+#Every p-value is very small, thus all residuals are autocorrelated !
+#We then define a function to run the adf test with lags until residuals aren't correlated anymore.
+
+#adfTest_valid
 adfTest_valid <- function(series,kmax,type){ #ADF tests until no more autocorrelated residuals
   k <- 0
   noautocorr <- 0
@@ -108,60 +111,68 @@ adfTest_valid <- function(series,kmax,type){ #ADF tests until no more autocorrel
   return(adf)
 }
 
-Qtests(adf@test$lm$residuals, 24, fitdf = length(adf@test$lm$coefficients)) 
-#Tout est autocorrélé donc il va falloir tout faire les petits lags.
-# NOTE A MOI MEME -> check le box test et H0 pour interpréter
 
-#Donc on corrige pour 24 lag
 adfTest_valid(production_train, 24, "c") 
-# P VALUE 0.3937 -> On rejette PAS H0 du test ADF, donc c'est pas stationnaire c'est parfait,on va devoir différencier.
-pp.test(as.vector(production_train), output = TRUE)
-#We will thus differenciate our serie to obtain a better rejected adf test
+# After 5 lags we got rid of autocorrelation.
+# We get a p-value of 0.0376. The series thus could be stationary but the result is quite close to 0.05.
 
-#Creating lags and first difference
+#We decide to investigate further by doing a PP test
+pp.test(as.vector(production_train), output = TRUE)
+#We get a p-value of 0.486, we are not able to reject HO and thus the series is celarly NOT stationary.
+# Thus the need to differentiate our series.
+
+#Creating lags and first difference in order to check for trend with a linear regression
 series$lag1 <- lag(series$Valeur)
 series$dif <- series$Valeur - series$lag1
 
-#Again, we run a regression to test for the presence of a time trend
+#We run a regression to test for the presence of a time trend
 reg_diff <- lm(dif ~ Time, data=series)
 stargazer(reg_diff, type="text")
-# We find no time trned, this is perfection.
+# We again find no trend, which is good.
 
-#There is no time trend and significant constant so we run an adf test of type "nc"
+#There is no time trend and no significant constant so we run an adf test of type "nc"
 dadf <- adfTest(dproduction, lag=0, type="nc") 
 dadf
 
 #We reject the non stationarity but we didn't consider lags so the test isn't valid
-#Again, all the residuals are correlated if we use an adf test with 0 lags
 
+#Testing again for autocorrelation
 Qtests(dadf@test$lm$residuals, 24, fitdf = length(dadf@test$lm$coefficients)) 
-#Oh no, there is autocorrelation
-#We run the same test as before to determine the number of lags we have to consider
 
+#Same as before, as there is autocorrelation we run the test to determine the number of lags we have to consider
 adfTest_valid(dproduction,24,"nc")
+# After 4 lags we get a small p-value at less than 0.01. OUr series is then likely stationary?
 
-#Do the pp test to be a good fayot
-pp.test(x=as.vector(dproduction), output=TRUE) #Phillips-Perron test
+#Just to be sure we can aso run PP + KPSS tests to further strenghten our result.
+pp.test(x=as.vector(dproduction), output=TRUE) 
 kpss.test(x=as.vector(dproduction)) #KPSS
+# In both cases we reject (or not) H0 leading to the conclusion that our differentiated series is stationary.
 
-######################
-### IV ARMA MODELS ###
-######################
 
-#We center the series just to test because we did it in the TD
+#######################
+### IV. ARMA MODELS ###
+#######################
+
+#We Begin by plotting ACF/PACF to determine the order of ARIMA we will consider
 par(mfrow=c(1,2))
 acf(dproduction,24);pacf(dproduction,24)
 dev.off()
 
 #Judging by the graph we then choose
-qmax <- 2
-pmax <- 4
+qmax <- 4
+pmax <- 5
 
-arima <- arima(dproduction,c(6,1,2))
-Box.test(arima$residuals, lag=6, type="Ljung-Box", fitdf=5) #
-
+# Computing an ARIMA(5,1,4) + Box test to check autocorrelation of residuals
+arima <- arima(dproduction,c(5,1,4))
 Qtests(arima$residuals, 24, 5)
+# All p-values are higher than 0.05, which mean ARMA(5,4) would be a valid model
 
+#We now check is the model is well adjusted:
+arima
+# We find that multiple coefficient are not significant. The model is thus not well adjusted, wo do not keep it
+
+# We will now generalize this reasoning to every possible model.
+# We then define 3 useful functions in order to test every combination of possible ARMA models.
 p_value <- #This function returns the p-values of the estimated ARMA
   function(estim) {
     coef <- estim$coef 
@@ -221,20 +232,61 @@ arma_model_choice <- #This function runs the previous one with all p<pmax & q<qm
     }))
   }
 
+# We calculate all possible ARMA models
 armamodels <- arma_model_choice(pmax,qmax,dproduction) #estime tous les arima (patienter...)
 
-print(armamodels)
-selec <- armamodels[armamodels[,"ok"]==1&!is.na(armamodels[,"ok"]),] #modeles bien ajustes et valides
+#We then select only models that are valid and well adjusted
+selec <- armamodels[armamodels[,"ok"]==1&!is.na(armamodels[,"ok"]),]
 selec
-### On a ? modeles bien ajustes et valides
+### We get 4 well adjusted and valid models:
+# ARMA(5,1)
+# ARMA(1,2)
+# ARMA(4,2)
+# ARMA(0,3)
 
-#On peut tester aussi ici sur la série pas différenciée (juste pour le malt)
-armamodelraw <-arma_model_choice(pmax,qmax,production_train)
-
-print(armamodelraw)
-##########
+############
 ## AIC / BIC
+## Now that we have 4 models, we need to determine which one we will choose using the AIC and BIC criterion.
+
+#We create a loop to calculate the AIC/BIC for each possibility in the grid (qmax,pmax)=(2,5)
+mat <- matrix(NA,nrow=pmax+1,ncol=qmax+1) #empty matrix to fill
+rownames(mat) <- paste0("p=",0:pmax) #renames lines
+colnames(mat) <- paste0("q=",0:qmax) #renames columns
+AICs <- mat #AIC matrix not filled 
+BICs <- mat #BIC matrix not filled 
+pqs <- expand.grid(0:pmax,0:qmax) #all possible combinations of p and q
+for (row in 1:dim(pqs)[1]){ #loop for each (p,q)
+  p <- pqs[row,1] #gets p
+  q <- pqs[row,2] #gets q
+  estim <- try(arima(dproduction,c(p,1,q),include.mean = F)) #tries ARIMA estimation
+  AICs[p+1,q+1] <- if (class(estim)=="try-error") NA else estim$aic #assigns the AIC
+  BICs[p+1,q+1] <- if (class(estim)=="try-error") NA else BIC(estim) #assigns the BIC
+}
+
+#Print the AICs
+AICs
+AICs==min(AICs)
+
+xtable(AICs) #We get the latex table
+
+#Print the AICs
+BICs
+BICs==min(BICs)
+
+xtable(BICs) #We get the latex table
+
+# We get that ARIMA(5,1,1) minimizes AIC and ARIMA(1,1,2) minimizes the BIC
+# Both models are also valid and well adjusted. We decide to keep them both for the moment.
+arima511 <- arima(dproduction,c(5,1,1))
+arima112 <- arima(dproduction,c(1,1,2))
 
 
-selec <- armamodelraw[armamodelraw[,"ok"]==1&!is.na(armamodelraw[,"ok"]),] #modeles bien ajustes et valides
-selec
+# TODO: distinguish the best model by calculating R2
+
+
+#######################
+### V. MODELIZATION ###
+#######################
+
+# TODO: Attention a bien check sur quel séries on calcule les ARMA
+# Typiquement peut être qu'on devrait le faire sur la série pas différenciée en fait...
