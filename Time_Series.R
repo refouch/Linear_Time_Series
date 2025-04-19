@@ -282,7 +282,21 @@ arima112 <- arima(dproduction,c(1,1,2))
 
 
 # TODO: distinguish the best model by calculating R2
+#Choice between the two models:
+#We create a function that calculate the Adjusted R2
+adj_r2 <- function(model){
+  ss_res <- sum(model$residuals^2) #sum of the squared residuals
+  p <- model$arma[1] #gets the AR order
+  q <- model$arma[2] #gets the MA order
+  ss_tot <- sum(dproduction[-c(1:max(p,q))]^2) #sum of the observations from the sample squared.
+  n <- model$nobs-max(p,q) #sample size
+  adj_r2 <- 1-(ss_res/(n-p-q-1))/(ss_tot/(n-1)) #r2 ajust´e
+  return(adj_r2)
+}
 
+adj_r2(arima112)
+adj_r2(arima511)
+#ARIMA(5,1,1) has the best adjusted R2, we thus keep it as our best model.
 
 #######################
 ### V. MODELIZATION ###
